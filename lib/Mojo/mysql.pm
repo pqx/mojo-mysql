@@ -8,7 +8,11 @@ use Mojo::mysql::Migrations;
 use Mojo::mysql::PubSub;
 use Mojo::URL;
 use Scalar::Util 'weaken';
+use SQL::Abstract;
 
+has abstract => sub { SQL::Abstract->new };
+has auto_migrate    => 0;
+has database_class  => 'Mojo::mysql::Database';
 has dsn             => 'dbi:mysql:dbname=test';
 has max_connections => 5;
 has migrations      => sub {
@@ -17,13 +21,7 @@ has migrations      => sub {
   return $migrations;
 };
 has options => sub {
-  {
-    mysql_enable_utf8 => 1,
-    AutoCommit => 1,
-    AutoInactiveDestroy => 1,
-    PrintError => 0,
-    RaiseError => 1
-  }
+  {mysql_enable_utf8 => 1, AutoCommit => 1, AutoInactiveDestroy => 1, PrintError => 0, RaiseError => 1};
 };
 has [qw(password username)] => '';
 has pubsub => sub {
@@ -33,7 +31,7 @@ has pubsub => sub {
 };
 
 
-our $VERSION = '0.12';
+our $VERSION = '1.01';
 
 sub db {
   my $self = shift;
@@ -42,7 +40,7 @@ sub db {
   delete @$self{qw(pid queue)} unless ($self->{pid} //= $$) eq $$;
 
   my ($dbh, $handle) = @{$self->_dequeue};
-  return Mojo::mysql::Database->new(dbh => $dbh, handle => $handle, mysql => $self);
+  return $self->database_class->new(dbh => $dbh, handle => $handle, mysql => $self);
 }
 
 sub from_string {
@@ -75,6 +73,14 @@ sub from_string {
 
 sub new { @_ > 1 ? shift->SUPER::new->from_string(@_) : shift->SUPER::new }
 
+sub strict_mode {
+  my $self = ref $_[0] ? shift : shift->new(@_);
+  $self->{strict_mode} = $_[0] ? 1 : @_ ? 0 : 1;
+  warn "[Mojo::mysql] strict_mode($self->{strict_mode})\n" if $ENV{DBI_TRACE};
+  delete @$self{qw(pid queue)};
+  return $self;
+}
+
 sub _dequeue {
   my $self = shift;
   my $dbh;
@@ -87,9 +93,12 @@ sub _dequeue {
   # you, silently, but only if certain env vars are set
   # hint: force-set mysql_auto_reconnect or whatever it's called to 0
   $dbh->{mysql_auto_reconnect} = 0;
+
   # Maintain Commits with Mojo::mysql::Transaction
   $dbh->{AutoCommit} = 1;
 
+  $self->_set_strict_mode($dbh) if $self->{strict_mode};
+  $self->migrations->migrate if $self->auto_migrate and !$self->{migrated}++;
   $self->emit(connection => $dbh);
   [$dbh];
 }
@@ -99,6 +108,11 @@ sub _enqueue {
   my $queue = $self->{queue} ||= [];
   push @$queue, [$dbh, $handle] if $dbh->{Active};
   shift @{$self->{queue}} while @{$self->{queue}} > $self->max_connections;
+}
+
+sub _set_strict_mode {
+  $_[1]->do(q[SET SQL_MODE = CONCAT('ANSI,TRADITIONAL,ONLY_FULL_GROUP_BY,', @@sql_mode)]);
+  $_[1]->do(q[SET SQL_AUTO_IS_NULL = 0]);
 }
 
 1;
@@ -114,7 +128,7 @@ Mojo::mysql - Mojolicious and Async MySQL
   use Mojo::mysql;
 
   # Create a table
-  my $mysql = Mojo::mysql->new('mysql://username@/test');
+  my $mysql = Mojo::mysql->strict_mode('mysql://username@/test');
   $mysql->db->query(
     'create table names (id integer auto_increment primary key, name text)');
 
@@ -135,6 +149,12 @@ Mojo::mysql - Mojolicious and Async MySQL
   # Insert another row and return the generated id
   say $db->query('insert into names (name) values (?)', 'Daniel')
     ->last_insert_id;
+
+  # Use SQL::Abstract to generate queries for you
+  $db->insert('names', {name => 'Isabel'});
+  say $db->select('names', undef, {name => 'Isabel'})->hash->{id};
+  $db->update('names', {name => 'Bel'}, {name => 'Isabel'});
+  $db->delete('names', {name => 'Bel'});
 
   # Select one row at a time
   my $results = $db->query('select * from names');
@@ -186,7 +206,7 @@ gracefully by holding on to them only for short amounts of time.
   use Mojo::mysql;
 
   helper mysql =>
-    sub { state $pg = Mojo::mysql->new('mysql://sri:s3cret@localhost/db') };
+    sub { state $mysql = Mojo::mysql->strict_mode('mysql://sri:s3cret@localhost/db') };
 
   get '/' => sub {
     my $c  = shift;
@@ -239,6 +259,34 @@ Emitted when a new database connection has been established.
 =head1 ATTRIBUTES
 
 L<Mojo::mysql> implements the following attributes.
+
+=head2 abstract
+
+  $abstract = $mysql->abstract;
+  $mysql    = $mysql->abstract(SQL::Abstract->new);
+
+L<SQL::Abstract> object used to generate CRUD queries for L<Mojo::mysql::Database>.
+
+  # Generate statements and bind values
+  my ($stmt, @bind) = $mysql->abstract->select('names');
+
+=head2 auto_migrate
+
+  my $bool = $mysql->auto_migrate;
+  $mysql   = $mysql->auto_migrate($bool);
+
+Automatically migrate to the latest database schema with L</"migrations">, as
+soon as the first database connection has been established.
+
+Defaults to false.
+
+=head2 database_class
+
+  $class = $mysql->database_class;
+  $mysql = $mysql->database_class("MyApp::Database");
+
+Class to be used by L</"db">, defaults to L<Mojo::mysql::Database>. Note that this
+class needs to have already been loaded before L</"db"> is called.
 
 =head2 dsn
 
@@ -364,6 +412,35 @@ Parse configuration from connection string.
 
 Construct a new L<Mojo::mysql> object and parse connection string with
 L</"from_string"> if necessary.
+
+=head2 strict_mode
+
+  my $mysql = Mojo::mysql->strict_mode('mysql://user@/test');
+  my $mysql = $mysql->strict_mode($boolean);
+
+This method can act as both a constructor and a method. When called as a
+constructor, it will be the same as:
+
+  my $mysql = Mojo::mysql->new('mysql://user@/test')->strict_mode(1);
+
+Enabling strict mode will execute the following statement when a new connection
+is created:
+
+  SET SQL_MODE = CONCAT('ANSI,TRADITIONAL,ONLY_FULL_GROUP_BY,', @@sql_mode)
+  SET SQL_AUTO_IS_NULL = 0
+
+The idea is to set up a connection that makes it harder for MySQL to allow
+"invalid" data to be inserted.
+
+This method will not be removed, but the internal commands is subject to
+change.
+
+=head1 DEBUGGING
+
+You can set the C<DBI_TRACE> environment variable to get some advanced
+diagnostics information printed to C<STDERR> by L<DBI>.
+
+  DBI_TRACE=1
 
 =head1 REFERENCE
 
