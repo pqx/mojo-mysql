@@ -36,7 +36,7 @@ has pubsub => sub {
 };
 
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 
 sub db {
   my $self = shift;
@@ -468,9 +468,11 @@ This is the class hierarchy of the L<Mojo::mysql> distribution.
 
 =head1 AUTHOR
 
-Curt Hochwender, C<hochwender@centurytel.net>.
+Curt Hochwender - C<hochwender@centurytel.net>.
 
-Jan Henning Thorsen, C<jhthorsen@cpan.org>.
+Dan Book - C<dbook@cpan.org>
+
+Jan Henning Thorsen - C<jhthorsen@cpan.org>.
 
 This code is mostly a rip-off from Sebastian Riedel's L<Mojo::Pg>.
 
