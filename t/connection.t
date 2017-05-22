@@ -2,12 +2,29 @@ use Mojo::Base -strict;
 use Test::More;
 use Mojo::mysql;
 
+my ($mysql, $options);
+
+# Testing for reading DBI_* environment variables as defaults (run this first to see if it interferes with the defaults)
+{ 
+	local %ENV;
+	$ENV{DBI_DSN} = "dbi:mysql:dbname=dbfromenv";
+	$ENV{DBI_USERNAME} = "unfromenv";
+	$ENV{DBI_PASSWORD} = "pwfromenv";
+
+	$mysql = Mojo::mysql->new();
+	is $mysql->dsn,      'dbi:mysql:dbname=dbfromenv', 'right data source from ENV{DBI_DSN}';
+	is $mysql->username, 'unfromenv',                  'right username from ENV{DBI_USERNAME}';
+	is $mysql->password, 'pwfromenv',                  'right password from ENV{DBI_PASSWORD}';
+	$options = {mysql_enable_utf8 => 1, AutoCommit => 1, AutoInactiveDestroy => 1, PrintError => 0, RaiseError => 1};
+	is_deeply $mysql->options, $options, 'right options';
+}
+
 # Defaults
-my $mysql = Mojo::mysql->new;
+$mysql = Mojo::mysql->new;
 is $mysql->dsn,      'dbi:mysql:dbname=test', 'right data source';
 is $mysql->username, '',                      'no username';
 is $mysql->password, '',                      'no password';
-my $options = {mysql_enable_utf8 => 1, AutoCommit => 1, AutoInactiveDestroy => 1, PrintError => 0, RaiseError => 1};
+$options = {mysql_enable_utf8 => 1, AutoCommit => 1, AutoInactiveDestroy => 1, PrintError => 0, RaiseError => 1};
 is_deeply $mysql->options, $options, 'right options';
 
 # Minimal connection string with database
@@ -49,6 +66,8 @@ is $mysql->username, '0',                  'right username';
 is $mysql->password, '0',                  'right password';
 $options = {mysql_enable_utf8 => 1, AutoCommit => 1, AutoInactiveDestroy => 1, PrintError => 0, RaiseError => 0};
 is_deeply $mysql->options, $options, 'right options';
+
+
 
 # Invalid connection string
 eval { Mojo::mysql->new('http://localhost:3000/test') };

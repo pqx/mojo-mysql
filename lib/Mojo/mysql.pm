@@ -13,7 +13,7 @@ use SQL::Abstract;
 has abstract => sub { SQL::Abstract->new };
 has auto_migrate    => 0;
 has database_class  => 'Mojo::mysql::Database';
-has dsn             => 'dbi:mysql:dbname=test';
+has dsn             => sub { $ENV{DBI_DSN} // 'dbi:mysql:dbname=test' };
 has max_connections => 5;
 has migrations      => sub {
   my $migrations = Mojo::mysql::Migrations->new(mysql => shift);
@@ -23,7 +23,10 @@ has migrations      => sub {
 has options => sub {
   {mysql_enable_utf8 => 1, AutoCommit => 1, AutoInactiveDestroy => 1, PrintError => 0, RaiseError => 1};
 };
-has [qw(password username)] => '';
+
+has username => sub { $ENV{DBI_USERNAME} // '' };
+has password => sub { $ENV{DBI_PASSWORD} // '' };
+
 has pubsub => sub {
   my $pubsub = Mojo::mysql::PubSub->new(mysql => shift);
   weaken $pubsub->{mysql};
